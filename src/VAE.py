@@ -372,8 +372,8 @@ class Trainer(object):
         #         except:
         #             raise TypeError('XRayDS must be instance of XRayDataset')
         self.SplitData = XRayDS.train_test_split(stratify, train_frac)
-        self.VAE = VariationalAutoencoder()
-        self.optimizer = torch.optim.Adam(self.VAE.parameters(), lr=1e-5, weight_decay=1e-6)
+        self.Model = VariationalAutoencoder()
+        self.optimizer = torch.optim.Adam(self.Model.parameters(), lr=1e-5, weight_decay=1e-6)
         self.running_stats = None
 
     def train(self, num_epochs=2, batch_size=100):
@@ -403,9 +403,9 @@ class Trainer(object):
                 print('Stage Beginning')
                 print(now.strftime("%Y-%m-%d %H:%M:%S"))
                 if stage == 'train':
-                    self.VAE.set_train_status(True)
+                    self.Model.set_train_status(True)
                 else:
-                    self.VAE.set_train_status(False)
+                    self.Model.set_train_status(False)
 
                 DS = self.SplitData[stage]
                 total_elbo = 0.
@@ -413,7 +413,7 @@ class Trainer(object):
                 m = 0
                 for sample_batched in loaders[stage]:
                     x = sample_batched['image']
-                    recon_x, z, mu, logvar = self.VAE.forward(x)
+                    recon_x, z, mu, logvar = self.Model.forward(x)
                     loss, elbo, log_pxz = vae_loss(recon_x, x, z, mu, logvar)
                     total_elbo += elbo
                     total_log_pxz += log_pxz
