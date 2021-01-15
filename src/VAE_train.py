@@ -18,11 +18,6 @@ output_dir = os.path.join(top_dir, 'results')
 if not os.path.exists(output_dir):
     os.mkdir(output_dir)
 
-# setup global variables for mean and std dev of intensity based on sandbox notebook
-# TODO: setup to calculate these stats based on random sample of images
-mean_intensity = np.float(123.5)
-std_intensity = np.float(58.2)
-
 # setup dataset
 table_data = pd.read_csv(os.path.join(data_dir, 'Data_Entry_2017_v2020.csv'))
 table_data = table_data.iloc[0:500, :]

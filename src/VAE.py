@@ -81,6 +81,12 @@ class RandomHorizontalFlip(SampleTransform):
         return transf_image
 
 
+# basic transform function
+# global variables for mean and std dev of intensity based on sandbox notebook
+# TODO: setup to calculate these stats based on random sample of images
+mean_intensity = np.float(123.5)
+std_intensity = np.float(58.2)
+
 basic_transform = transforms.Compose([
         ToTensor(),
         Normalize(mean_intensity, std_intensity),
