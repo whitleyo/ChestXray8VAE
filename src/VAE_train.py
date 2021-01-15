@@ -2,16 +2,15 @@ import VAE
 import os
 import torch
 import numpy as np
-
-from skimage import io
 from warnings import warn
+import pandas as pd
 
 # set random seed
 np.random.seed(42)
 
 # setup directories
 # top_dir = 'D:/projects/chest_XRay_8'
-top_dir = '/home/owhitley/projects/chest_XRay_8'
+top_dir = '/home/owhitley/projects/chest_xray_8'
 data_dir = os.path.join(top_dir, 'data')
 image_dir = os.path.join(data_dir, 'images')
 output_dir = os.path.join(top_dir, 'results')
