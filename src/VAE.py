@@ -16,6 +16,9 @@ from warnings import warn
 import os
 import re
 import datetime
+import gc
+import sys
+# from memory_profiler import profile
 # from tqdm import tqdm
 
 
@@ -154,7 +157,7 @@ class XRayDataset(Dataset):
         if len(image.shape) > 2:
             # assuming that first image in image series identical to 2 others in series,
             # and last (4th) is blank as was seen in earlier exploration of 'multi-channel'
-            # images.
+            # images. This assumption was based on manual examination of data.
             image = image[:, :, 0]
         # gets 1 row of dataframe if idx of len 1 and returns it as a dict
         table_data = self.table_data.iloc[np.arange(0, 1), :].to_dict(orient='records')[0]['Image Index']
@@ -279,6 +282,9 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
+    """
+    Decoder function.
+    """
     def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1):
         super(Decoder, self).__init__()
         # the below four lines are ugly but quick. In future make this class able to dynamically
@@ -330,7 +336,7 @@ class VariationalAutoencoder(nn.Module):
             eps = torch.empty_like(std).normal_()
             z = eps.mul(std).add_(mu)
         else:
-            # It appears that when not training, you want to return the 'expected' position
+            # When not training, return the 'expected' position
             z = mu
 
         return z
@@ -372,6 +378,11 @@ def vae_loss(recon_x, x, z, mu, logvar):
 class Trainer(object):
 
     def __init__(self, XRayDS, stratify=None, train_frac=0.8):
+        """
+        XRayDS = XRayDataSet
+        stratify = vector of classes to stratify by.
+        train_frac = fraction of samples to use for training
+        """
         # below lines commented out as I can't figure out whey isinstance(XRayDS, XRayDataset) fails
         #         try:
         #             assert isinstance(XRayDS, XRayDataset)
@@ -379,10 +390,13 @@ class Trainer(object):
         #             raise TypeError('XRayDS must be instance of XRayDataset')
         self.SplitData = XRayDS.train_test_split(stratify, train_frac)
         self.Model = VariationalAutoencoder()
-        self.optimizer = torch.optim.Adam(self.Model.parameters(), lr=1e-5, weight_decay=1e-6)
+        self.optimizer = torch.optim.Adam(self.Model.parameters(), lr=2e-6, weight_decay=1e-7)
         self.running_stats = None
-
+    # @profile
     def train(self, num_epochs=2, batch_size=100):
+        """
+        Run training for specified number of epochs with specified batch size
+        """
         # DataLoaders go through all complete batches
         train_loader = DataLoader(self.SplitData['train'], batch_size=batch_size,
                                   shuffle=True, num_workers=0, drop_last=True)
@@ -421,8 +435,12 @@ class Trainer(object):
                     x = sample_batched['image']
                     recon_x, z, mu, logvar = self.Model.forward(x)
                     loss, elbo, log_pxz = vae_loss(recon_x, x, z, mu, logvar)
+                    # print('ELBO class{}'.format(type(elbo)))
+                    # print('log_pxz class{}'.format(type(log_pxz)))
                     total_elbo += elbo
                     total_log_pxz += log_pxz
+                    # print('total_elbo class {}'.format(type(total_elbo)))
+                    # print('total_elbo size {}'.format(sys.getsizeof(total_elbo)))
                     if do_backprop:
                         if stage == 'train':
                             self.optimizer.zero_grad()
@@ -430,6 +448,7 @@ class Trainer(object):
                             self.optimizer.step()
 
                     m += 1
+                    gc.collect()
                 # average ELBO across batches + log p(x|z)
                 # since log p(x|z) is summed across all pixels across all samples,
                 # the sum across all batches is the joint probability across all batches.

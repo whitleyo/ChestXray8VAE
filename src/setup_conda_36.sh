@@ -33,6 +33,7 @@ conda install -y -c conda-forge matplotlib
 conda install -y -c conda-forge scipy
 conda install -y -c conda-forge pytest
 conda install -y -c conda-forge gdcm
+conda install -y -c anaconda memory_profiler
 # note that for nbconvert you need XeLaTeX. since this requires sudo permissions, do this command manually after running this script
 # sudo apt-get install texlive-xetex texlive-fonts-recommended texlive-generic-recommended
 conda install -y jupyter
