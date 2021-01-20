@@ -456,8 +456,12 @@ class Trainer(object):
                     check_mem_usage()
                     # print('ELBO class{}'.format(type(elbo)))
                     # print('log_pxz class{}'.format(type(log_pxz)))
-                    total_elbo += elbo
-                    total_log_pxz += log_pxz
+                    total_elbo += elbo.item()
+                    total_log_pxz += log_pxz.item()
+                    elbo.detach()
+                    log_pxz.detach()
+                    del elbo
+                    del log_pxz
                     # print('total_elbo class {}'.format(type(total_elbo)))
                     # print('total_elbo size {}'.format(sys.getsizeof(total_elbo)))
                     if do_backprop:
@@ -487,9 +491,9 @@ class Trainer(object):
                 print(now.strftime("%Y-%m-%d %H:%M:%S"))
                 print('ELBO (avg): {:.2e} log p(x|z): (avg) {:.2e} '.format(avg_elbo, avg_log_pxz))
                 running_stats[stage]['avg_elbo'] = np.append(running_stats[stage]['avg_elbo'],
-                                                             avg_elbo.detach().numpy())
+                                                             avg_elbo)
                 running_stats[stage]['avg_log_pxz'] = np.append(running_stats[stage]['avg_log_pxz'],
-                                                                avg_log_pxz.detach().numpy())
+                                                                avg_log_pxz)
 
         self.running_stats = running_stats
         print('===========================================')
