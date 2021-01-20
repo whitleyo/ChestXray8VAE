@@ -388,7 +388,7 @@ def vae_loss(recon_x, x, z, mu, logvar):
 
 class Trainer(object):
 
-    def __init__(self, XRayDS, stratify=None, train_frac=0.8):
+    def __init__(self, XRayDS, stratify=None, train_frac=0.8, learning_rate=1e-6, weight_decay=1e-7):
         """
         XRayDS = XRayDataSet
         stratify = vector of classes to stratify by.
@@ -401,7 +401,7 @@ class Trainer(object):
         #             raise TypeError('XRayDS must be instance of XRayDataset')
         self.SplitData = XRayDS.train_test_split(stratify, train_frac)
         self.Model = VariationalAutoencoder()
-        self.optimizer = torch.optim.Adam(self.Model.parameters(), lr=2e-6, weight_decay=1e-7)
+        self.optimizer = torch.optim.Adam(self.Model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         self.running_stats = None
     # @profile
     def train(self, num_epochs=2, batch_size=100):
@@ -444,22 +444,23 @@ class Trainer(object):
                 total_log_pxz = 0.
                 m = 0
                 for sample_batched in loaders[stage]:
-                    print('### Batch {} ###'.format(m + 1))
+#                     print('### Batch {} ###'.format(m + 1))
                     x = sample_batched['image']
-                    print('Mem usage pre-forward pass')
-                    check_mem_usage()
+#                     print('Mem usage pre-forward pass')
+#                     check_mem_usage()
                     recon_x, z, mu, logvar = self.Model.forward(x)
-                    print('Mem usage post-forward pass')
-                    check_mem_usage()
+#                     print('Mem usage post-forward pass')
+#                     check_mem_usage()
                     loss, elbo, log_pxz = vae_loss(recon_x, x, z, mu, logvar)
-                    print('Mem Usage post-loss calculation')
-                    check_mem_usage()
+#                     print('Mem Usage post-loss calculation')
+#                     check_mem_usage()
                     # print('ELBO class{}'.format(type(elbo)))
                     # print('log_pxz class{}'.format(type(log_pxz)))
                     total_elbo += elbo.item()
                     total_log_pxz += log_pxz.item()
                     elbo.detach()
                     log_pxz.detach()
+#                     print('ELBO: {:.2e} log p(x|z): {:.2e} '.format(elbo.item(), log_pxz.item()))
                     del elbo
                     del log_pxz
                     # print('total_elbo class {}'.format(type(total_elbo)))
@@ -467,14 +468,14 @@ class Trainer(object):
                     if do_backprop:
                         if stage == 'train':
                             self.optimizer.zero_grad()
-                            print('Mem Usage post zero grad')
-                            check_mem_usage()
+#                             print('Mem Usage post zero grad')
+#                             check_mem_usage()
                             loss.backward()
-                            print('Mem Usage post backprop')
-                            check_mem_usage()
+#                             print('Mem Usage post backprop')
+#                             check_mem_usage()
                             self.optimizer.step()
-                            print('Mem Usage post optimizer step')
-                            check_mem_usage()
+#                             print('Mem Usage post optimizer step')
+#                             check_mem_usage()
 
                     m += 1
                     gc.collect()
