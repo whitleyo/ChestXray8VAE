@@ -18,9 +18,21 @@ import re
 import datetime
 import gc
 import sys
+import psutil
 # from memory_profiler import profile
 # from tqdm import tqdm
 
+
+def check_mem_usage():
+    """
+    Check memory used, in GB
+    """
+    mem_info = psutil.virtual_memory()
+    total_mem = mem_info[0]
+    avail_mem = mem_info[1]
+    mem_used = np.float(total_mem - avail_mem)/np.power(1000, 3)
+    now = datetime.datetime.now()
+    print(now.strftime("%Y-%m-%d %H:%M:%S") + ' mem used: {} GB'.format(mem_used))
 
 # Classes with callable methods to be used for transforms
 class SampleTransform(object):
@@ -374,7 +386,6 @@ def vae_loss(recon_x, x, z, mu, logvar):
     loss = -elbo
     return loss, elbo, log_pxz
 
-
 class Trainer(object):
 
     def __init__(self, XRayDS, stratify=None, train_frac=0.8):
@@ -418,6 +429,7 @@ class Trainer(object):
                 do_backprop = True
 
             for stage in ['train', 'test']:
+                print('###########################################')
                 print('__' + stage + '__')
                 now = datetime.datetime.now()
                 print('Stage Beginning')
@@ -432,9 +444,16 @@ class Trainer(object):
                 total_log_pxz = 0.
                 m = 0
                 for sample_batched in loaders[stage]:
+                    print('### Batch {} ###'.format(m + 1))
                     x = sample_batched['image']
+                    print('Mem usage pre-forward pass')
+                    check_mem_usage()
                     recon_x, z, mu, logvar = self.Model.forward(x)
+                    print('Mem usage post-forward pass')
+                    check_mem_usage()
                     loss, elbo, log_pxz = vae_loss(recon_x, x, z, mu, logvar)
+                    print('Mem Usage post-loss calculation')
+                    check_mem_usage()
                     # print('ELBO class{}'.format(type(elbo)))
                     # print('log_pxz class{}'.format(type(log_pxz)))
                     total_elbo += elbo
@@ -444,8 +463,14 @@ class Trainer(object):
                     if do_backprop:
                         if stage == 'train':
                             self.optimizer.zero_grad()
+                            print('Mem Usage post zero grad')
+                            check_mem_usage()
                             loss.backward()
+                            print('Mem Usage post backprop')
+                            check_mem_usage()
                             self.optimizer.step()
+                            print('Mem Usage post optimizer step')
+                            check_mem_usage()
 
                     m += 1
                     gc.collect()
@@ -458,7 +483,7 @@ class Trainer(object):
                 avg_log_pxz = total_log_pxz / np.float(m)
 
                 now = datetime.datetime.now()
-                print('Stage Finished')
+                print('### Stage Finished ###')
                 print(now.strftime("%Y-%m-%d %H:%M:%S"))
                 print('ELBO (avg): {:.2e} log p(x|z): (avg) {:.2e} '.format(avg_elbo, avg_log_pxz))
                 running_stats[stage]['avg_elbo'] = np.append(running_stats[stage]['avg_elbo'],
