@@ -388,7 +388,7 @@ def vae_loss(recon_x, x, z, mu, logvar):
 
 class Trainer(object):
 
-    def __init__(self, XRayDS, stratify=None, train_frac=0.8, learning_rate=1e-6, weight_decay=1e-7):
+    def __init__(self, XRayDS, stratify=None, train_frac=0.8, learning_rate=1e-7, weight_decay=5e-8, use_GPU = True):
         """
         XRayDS = XRayDataSet
         stratify = vector of classes to stratify by.
@@ -401,8 +401,24 @@ class Trainer(object):
         #             raise TypeError('XRayDS must be instance of XRayDataset')
         self.SplitData = XRayDS.train_test_split(stratify, train_frac)
         self.Model = VariationalAutoencoder()
+        
+        if use_GPU:
+            if not torch.cuda.is_available():
+                warn('torch.cuda.is_available() returned False, using CPU')
+            else:
+                print('using GPU')
+                
+            device = torch.device("cuda:0" if use_GPU and torch.cuda.is_available() else "cpu")
+            self.Model = self.Model.to(device)
+            
+        else:
+            device = 'cpu'
+            print('using CPU')
+            
         self.optimizer = torch.optim.Adam(self.Model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         self.running_stats = None
+        self.device = device
+        
     # @profile
     def train(self, num_epochs=2, batch_size=100):
         """
@@ -445,7 +461,9 @@ class Trainer(object):
                 m = 0
                 for sample_batched in loaders[stage]:
 #                     print('### Batch {} ###'.format(m + 1))
+                    # load image and put to appropriate device
                     x = sample_batched['image']
+                    x = x.to(self.device)
 #                     print('Mem usage pre-forward pass')
 #                     check_mem_usage()
                     recon_x, z, mu, logvar = self.Model.forward(x)
