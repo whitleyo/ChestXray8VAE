@@ -9,8 +9,8 @@ import pandas as pd
 np.random.seed(42)
 
 # setup directories
-# top_dir = 'D:/projects/chest_XRay_8'
-top_dir = '/home/owhitley/projects/chest_xray_8'
+top_dir = 'D:\\projects\\chest_XRay_8'
+# top_dir = '/home/owhitley/projects/chest_xray_8'
 data_dir = os.path.join(top_dir, 'data')
 image_dir = os.path.join(data_dir, 'images')
 output_dir = os.path.join(top_dir, 'results')
@@ -27,8 +27,9 @@ VAE_DS = VAE.XRayDataset(table_data=table_data,
 # setup trainer and train
 VAE_Trainer = VAE.Trainer(XRayDS=VAE_DS)
 n_epochs = 20
-VAE_Trainer.train(num_epochs=n_epochs, batch_size=200)
+VAE_Trainer.train(num_epochs=n_epochs, batch_size=50)
 # save model state
 FinalModel = VAE_Trainer.Model
+torch.save(VAE_Trainer, os.path.join(output_dir, 'VAE_trainer.pt'))
 torch.save(FinalModel.state_dict(), os.path.join(output_dir, 'VAE_state_dict_trained.pt'))
 torch.save(VAE_Trainer.running_stats, os.path.join(output_dir, 'VAE_running_stats.pt'))
