@@ -388,7 +388,7 @@ def vae_loss(recon_x, x, z, mu, logvar):
 
 class Trainer(object):
 
-    def __init__(self, XRayDS, stratify=None, train_frac=0.8, learning_rate=1e-7, weight_decay=5e-8, use_GPU = True):
+    def __init__(self, XRayDS, stratify=None, train_frac=0.8, learning_rate=5e-8, weight_decay=1e-8, use_GPU = True):
         """
         XRayDS = XRayDataSet
         stratify = vector of classes to stratify by.
@@ -433,7 +433,7 @@ class Trainer(object):
         running_stats = {'train': {'avg_elbo': np.array([]), 'avg_log_pxz': np.array([])},
                          'test': {'avg_elbo': np.array([]), 'avg_log_pxz': np.array([])}}
         for epoch in range(num_epochs + 1):
-            print('===========================================')
+            print('###########################################')
             avg_loss = {'train': None, 'test': None}
             now = datetime.datetime.now()
             print(now.strftime("%Y-%m-%d %H:%M:%S"))
@@ -445,7 +445,7 @@ class Trainer(object):
                 do_backprop = True
 
             for stage in ['train', 'test']:
-                print('###########################################')
+                print('===========================================')
                 print('__' + stage + '__')
                 now = datetime.datetime.now()
                 print('Stage Beginning')
