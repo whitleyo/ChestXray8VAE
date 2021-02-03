@@ -104,8 +104,7 @@ std_intensity = np.float(58.2)
 
 basic_transform = transforms.Compose([
         ToTensor(),
-        Normalize(mean_intensity, std_intensity),
-        RandomHorizontalFlip()
+        Normalize(mean_intensity, std_intensity)
     ])
 
 
@@ -277,16 +276,17 @@ class Encoder(nn.Module):
         conv1_out_size = conv_output_size(input_size, S, F, P)
         self.conv2 = nn.Conv2d(in_channels=c, out_channels=c * 2, kernel_size=F, stride=S, padding=P)
         conv2_out_size = conv_output_size(conv1_out_size, S, F, P)
-        self.conv3 = nn.Conv2d(in_channels=c * 2, out_channels=c * 4, kernel_size=F, stride=S, padding=P)
-        conv3_out_size = conv_output_size(conv2_out_size, S, F, P)
-        linear_input_size = (int(c * 4 * conv3_out_size * conv3_out_size))
+#         self.conv3 = nn.Conv2d(in_channels=c * 2, out_channels=c * 4, kernel_size=F, stride=S, padding=P)
+#         conv3_out_size = conv_output_size(conv2_out_size, S, F, P)
+#         linear_input_size = (int(c * 4 * conv3_out_size * conv3_out_size))
+        linear_input_size = (int(c * 2 * conv2_out_size * conv2_out_size))
         self.fc_mu = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
         self.fc_logvar = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
 
     def forward(self, x):
         x = F.softplus(self.conv1(x))
         x = F.softplus(self.conv2(x))
-        x = F.softplus(self.conv3(x))
+#         x = F.softplus(self.conv3(x))
         x = x.view(x.size((int(0))), -1)  # flatten batch of multi-channel feature maps to a batch of feature vectors
         x_mu = self.fc_mu(x)
         x_logvar = self.fc_logvar(x)
@@ -297,38 +297,51 @@ class Decoder(nn.Module):
     """
     Decoder function.
     """
-    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1):
+    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1, output = 'Gaussian'):
         super(Decoder, self).__init__()
         # the below four lines are ugly but quick. In future make this class able to dynamically
         # allocate layers, but first let's get a simple first pass
         conv1_out_size = conv_output_size(input_size, S, F, P)
         conv2_out_size = conv_output_size(conv1_out_size, S, F, P)
-        conv3_out_size = conv_output_size(conv2_out_size, S, F, P)
-        self.conv3_out_size = int(conv3_out_size)
+#         conv3_out_size = conv_output_size(conv2_out_size, S, F, P)
+        # self.conv3_out_size = int(conv3_out_size)
+        self.conv2_out_size = int(conv2_out_size)
         self.channels = c
+#         self.fc1 = nn.Linear(in_features=(int(latent_dims)),
+#                              out_features=(int(c * 4 * conv3_out_size * conv3_out_size)))
+#         self.conv3 = nn.ConvTranspose2d(in_channels=c * 4, out_channels=c * 2, kernel_size=F, stride=S, padding=P)
         self.fc1 = nn.Linear(in_features=(int(latent_dims)),
-                             out_features=(int(c * 4 * conv3_out_size * conv3_out_size)))
-        self.conv3 = nn.ConvTranspose2d(in_channels=c * 4, out_channels=c * 2, kernel_size=F, stride=S, padding=P)
+                             out_features=(int(c * 2 * conv2_out_size * conv2_out_size)))
         self.conv2 = nn.ConvTranspose2d(in_channels=c * 2, out_channels=c, kernel_size=F, stride=S, padding=P)
         self.conv1 = nn.ConvTranspose2d(in_channels=c, out_channels=1, kernel_size=F, stride=S, padding=P)
-
+        self.output = output
     def forward(self, x):
         c = self.channels
-        conv3_out_size = self.conv3_out_size
+        output = self.output
+#         conv3_out_size = self.conv3_out_size
+        conv2_out_size = self.conv2_out_size
         x = self.fc1(x)
-        x = x.view((x.shape[0], c * 4, conv3_out_size,
-                    conv3_out_size))  # unflatten batch of feature vectors to a batch of multi-channel feature maps
-        x = F.softplus(self.conv3(x))
+#         x = x.view((x.shape[0], c * 4, conv3_out_size,
+#                     conv3_out_size))  # unflatten batch of feature vectors to a batch of multi-channel feature maps
+        x = x.view((x.shape[0], c * 2, conv2_out_size,
+                    conv2_out_size))  # unflatten batch of feature vectors to a batch of multi-channel feature maps
+#         x = F.softplus(self.conv3(x))
         x = F.softplus(self.conv2(x))
-        x = self.conv1(x)
+        if output == 'Gaussian':
+            x = self.conv1(x)
+        elif output == 'Binary':
+            x = x = torch.sigmoid(self.conv1(x))
+        else:
+            raise ValueError('output should be specified as Gaussian or Binary')
+            
         return x
 
 
 class VariationalAutoencoder(nn.Module):
-    def __init__(self, input_size=1024, c=4, latent_dims=20, S=2, F=4, P=1, training=True):
+    def __init__(self, input_size=1024, c=4, latent_dims=20, S=2, F=4, P=1, training=True, output = 'Gaussian'):
         super(VariationalAutoencoder, self).__init__()
         self.encoder = Encoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P)
-        self.decoder = Decoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P)
+        self.decoder = Decoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, output = output)
         self.training = training
 
     def set_train_status(self, training):
@@ -356,6 +369,7 @@ class VariationalAutoencoder(nn.Module):
 
 def vae_loss(recon_x, x, z, mu, logvar):
     """
+    Calculates ELBO with Gaussian likelihood for p(x|z)
     recon_x = reconstructed images of x
     x = original set of images
     z = value of z sampled VariationalAutoEncoder.latent_sample()
@@ -368,27 +382,75 @@ def vae_loss(recon_x, x, z, mu, logvar):
     # std_norm_xz = (recon_x - x)/std_pixels
     normal_xz = torch.distributions.normal.Normal(recon_x, std_pixels)
     log_pxz = torch.sum(normal_xz.log_prob(x))
-    # calculate log p(z). calculated over all images over all latent dims
-    normal_z = torch.distributions.normal.Normal(0., 1.)
-    log_pz = torch.sum(normal_z.log_prob(z))
-    # calculate log q(z). calculated over all images over all latent dims
-    # std_norm_zx = (z-mu)/(logvar.exp())
-    normal_zx = torch.distributions.normal.Normal(mu, torch.exp(logvar))
-    log_qz = torch.sum(normal_zx.log_prob(z))
+#     # calculate log p(z). calculated over all images over all latent dims
+#     normal_z = torch.distributions.normal.Normal(0., 1.)
+#     log_pz = torch.sum(normal_z.log_prob(z))
+#     # calculate log q(z). calculated over all images over all latent dims
+#     # std_norm_zx = (z-mu)/(logvar.exp())
+#     normal_zx = torch.distributions.normal.Normal(mu, torch.exp(logvar))
+#     log_qz = torch.sum(normal_zx.log_prob(z))
 
-    total_samples = np.float(recon_x.shape[0])
-    # using this sum is same as performping log p(x|z) + log p(z) - log q(z)
-    # for all images, and then summing over all images.
-    summed_elbo = log_pxz + log_pz - log_qz
-    # ELBO = Eq[log p(x|z) + log p(z) - log q(z)]
-    elbo = summed_elbo / total_samples
-    # we want to maximize elbo so we set the -elbo as the loss
-    loss = -elbo
-    return loss, elbo, log_pxz
+#     total_samples = np.float(recon_x.shape[0])
+#     # using this sum is same as performping log p(x|z) + log p(z) - log q(z)
+#     # for all images, and then summing over all images.
+#     summed_elbo = log_pxz + log_pz - log_qz
+#     # ELBO = Eq[log p(x|z) + log p(z) - log q(z)]
+#     elbo = summed_elbo / total_samples
+#     # we want to maximize elbo so we set the -elbo as the loss
+#     loss = -elbo
+    # calculate KL divergence between q(z) and p(z).
+    kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp(), -1)
+    # we want to maximize elbo so we set the -elbo_avg as the loss
+    elbo = log_pxz - kldivergence
+    elbo_avg = torch.mean(elbo)
+    loss = -elbo_avg
+    
+    return loss, elbo
+
+def vae_loss_CE(recon_x, x, z, mu, logvar):
+    """
+    Calculates ELBO with bernoulli log likelihood for p(x|z)
+    recon_x = reconstructed images of x
+    x = original set of images
+    z = value of z sampled VariationalAutoEncoder.latent_sample()
+    mu = mean in latent space
+    logvar = log-variance in latent space
+    """
+    std_pixels = torch.std(x)
+    # calculate log p(x|z) for all pixels. calculated over all pixels over all images
+    # normal_dist = torch.distributions.normal.Normal(0, 1)
+    # std_norm_xz = (recon_x - x)/std_pixels
+    bernoulli_dist = torch.distributions.bernoulli.Bernoulli(x)
+    log_pxz = torch.sum(bernoulli_dist.log_prob(recon_x), (1, 2, 3))
+#     # calculate log p(z). calculated over all images over all latent dims
+#     normal_z = torch.distributions.normal.Normal(0., 1.)
+#     log_pz = torch.sum(normal_z.log_prob(z), -1)
+#     # calculate log q(z). calculated over all images over all latent dims
+#     # std_norm_zx = (z-mu)/(logvar.exp())
+#     normal_zx = torch.distributions.normal.Normal(mu, torch.exp(logvar))
+#     log_qz = torch.sum(normal_zx.log_prob(z), -1)
+
+#     total_samples = np.float(recon_x.shape[0])
+#     # sum, for each ELBO = Eq[log p(x|z) + log p(z) - log q(z)]
+#     elbo_avg = torch.mean(log_pxz + log_pz - log_qz)
+    # KL Divergence for gaussian mu and logvar
+    kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp(), -1)
+    # we want to maximize elbo so we set the -elbo_avg as the loss
+    elbo = log_pxz - kldivergence
+    elbo_avg = torch.mean(elbo)
+    loss = -elbo_avg
+    return loss, elbo_avg
 
 class Trainer(object):
 
-    def __init__(self, XRayDS, stratify=None, train_frac=0.8, learning_rate=5e-8, weight_decay=1e-8, use_GPU = True):
+    def __init__(self, 
+                 XRayDS, 
+                 Model = VariationalAutoencoder(), 
+                 stratify=None, 
+                 train_frac=0.8, 
+                 learning_rate=5e-8, 
+                 weight_decay=1e-8, 
+                 use_GPU = True):
         """
         XRayDS = XRayDataSet
         stratify = vector of classes to stratify by.
@@ -400,7 +462,7 @@ class Trainer(object):
         #         except:
         #             raise TypeError('XRayDS must be instance of XRayDataset')
         self.SplitData = XRayDS.train_test_split(stratify, train_frac)
-        self.Model = VariationalAutoencoder()
+        self.Model = Model
         
         if use_GPU:
             if not torch.cuda.is_available():
