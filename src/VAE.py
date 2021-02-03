@@ -367,7 +367,7 @@ class VariationalAutoencoder(nn.Module):
         return z
 
 
-def vae_loss(recon_x, x, z, mu, logvar):
+def vae_loss(recon_x, x, mu, logvar):
     """
     Calculates ELBO with Gaussian likelihood for p(x|z)
     recon_x = reconstructed images of x
@@ -382,32 +382,17 @@ def vae_loss(recon_x, x, z, mu, logvar):
     # std_norm_xz = (recon_x - x)/std_pixels
     normal_xz = torch.distributions.normal.Normal(recon_x, std_pixels)
     log_pxz = torch.sum(normal_xz.log_prob(x))
-#     # calculate log p(z). calculated over all images over all latent dims
-#     normal_z = torch.distributions.normal.Normal(0., 1.)
-#     log_pz = torch.sum(normal_z.log_prob(z))
-#     # calculate log q(z). calculated over all images over all latent dims
-#     # std_norm_zx = (z-mu)/(logvar.exp())
-#     normal_zx = torch.distributions.normal.Normal(mu, torch.exp(logvar))
-#     log_qz = torch.sum(normal_zx.log_prob(z))
 
-#     total_samples = np.float(recon_x.shape[0])
-#     # using this sum is same as performping log p(x|z) + log p(z) - log q(z)
-#     # for all images, and then summing over all images.
-#     summed_elbo = log_pxz + log_pz - log_qz
-#     # ELBO = Eq[log p(x|z) + log p(z) - log q(z)]
-#     elbo = summed_elbo / total_samples
-#     # we want to maximize elbo so we set the -elbo as the loss
-#     loss = -elbo
     # calculate KL divergence between q(z) and p(z).
     kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp(), -1)
     # we want to maximize elbo so we set the -elbo_avg as the loss
     elbo = log_pxz - kldivergence
     elbo_avg = torch.mean(elbo)
     loss = -elbo_avg
-    
-    return loss, elbo
+    avg_log_pxz = torch.mean(log_pxz)
+    return loss, elbo_avg, avg_log_pxz
 
-def vae_loss_CE(recon_x, x, z, mu, logvar):
+def vae_loss_CE(recon_x, x, mu, logvar):
     """
     Calculates ELBO with bernoulli log likelihood for p(x|z)
     recon_x = reconstructed images of x
@@ -422,24 +407,16 @@ def vae_loss_CE(recon_x, x, z, mu, logvar):
     # std_norm_xz = (recon_x - x)/std_pixels
     bernoulli_dist = torch.distributions.bernoulli.Bernoulli(x)
     log_pxz = torch.sum(bernoulli_dist.log_prob(recon_x), (1, 2, 3))
-#     # calculate log p(z). calculated over all images over all latent dims
-#     normal_z = torch.distributions.normal.Normal(0., 1.)
-#     log_pz = torch.sum(normal_z.log_prob(z), -1)
-#     # calculate log q(z). calculated over all images over all latent dims
-#     # std_norm_zx = (z-mu)/(logvar.exp())
-#     normal_zx = torch.distributions.normal.Normal(mu, torch.exp(logvar))
-#     log_qz = torch.sum(normal_zx.log_prob(z), -1)
 
-#     total_samples = np.float(recon_x.shape[0])
-#     # sum, for each ELBO = Eq[log p(x|z) + log p(z) - log q(z)]
-#     elbo_avg = torch.mean(log_pxz + log_pz - log_qz)
     # KL Divergence for gaussian mu and logvar
     kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp(), -1)
     # we want to maximize elbo so we set the -elbo_avg as the loss
     elbo = log_pxz - kldivergence
     elbo_avg = torch.mean(elbo)
     loss = -elbo_avg
-    return loss, elbo_avg
+    avg_log_pxz = torch.mean(log_pxz)
+    return loss, elbo_avg, avg_log_pxz
+
 
 class Trainer(object):
 
@@ -448,8 +425,8 @@ class Trainer(object):
                  Model = VariationalAutoencoder(), 
                  stratify=None, 
                  train_frac=0.8, 
-                 learning_rate=5e-8, 
-                 weight_decay=1e-8, 
+                 learning_rate=1e-3, 
+                 weight_decay=1e-5, 
                  use_GPU = True):
         """
         XRayDS = XRayDataSet
@@ -518,6 +495,8 @@ class Trainer(object):
                     self.Model.set_train_status(False)
 
                 DS = self.SplitData[stage]
+                # total elbo and total_log_pxz are used to calculate
+                # averaged elbo and log_pxz across multiple batches
                 total_elbo = 0.
                 total_log_pxz = 0.
                 m = 0
@@ -526,36 +505,21 @@ class Trainer(object):
                     # load image and put to appropriate device
                     x = sample_batched['image']
                     x = x.to(self.device)
-#                     print('Mem usage pre-forward pass')
-#                     check_mem_usage()
                     recon_x, z, mu, logvar = self.Model.forward(x)
-#                     print('Mem usage post-forward pass')
-#                     check_mem_usage()
-                    loss, elbo, log_pxz = vae_loss(recon_x, x, z, mu, logvar)
-#                     print('Mem Usage post-loss calculation')
-#                     check_mem_usage()
-                    # print('ELBO class{}'.format(type(elbo)))
-                    # print('log_pxz class{}'.format(type(log_pxz)))
+                    # elbo and log_pxz are really averages across batch
+                    loss, elbo, log_pxz = vae_loss(recon_x, x, mu, logvar)
                     total_elbo += elbo.item()
                     total_log_pxz += log_pxz.item()
                     elbo.detach()
                     log_pxz.detach()
-#                     print('ELBO: {:.2e} log p(x|z): {:.2e} '.format(elbo.item(), log_pxz.item()))
                     del elbo
                     del log_pxz
-                    # print('total_elbo class {}'.format(type(total_elbo)))
-                    # print('total_elbo size {}'.format(sys.getsizeof(total_elbo)))
+        
                     if do_backprop:
                         if stage == 'train':
                             self.optimizer.zero_grad()
-#                             print('Mem Usage post zero grad')
-#                             check_mem_usage()
                             loss.backward()
-#                             print('Mem Usage post backprop')
-#                             check_mem_usage()
                             self.optimizer.step()
-#                             print('Mem Usage post optimizer step')
-#                             check_mem_usage()
 
                     m += 1
                     gc.collect()

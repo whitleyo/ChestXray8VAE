@@ -19,14 +19,14 @@ if not os.path.exists(output_dir):
 
 # setup dataset
 table_data = pd.read_csv(os.path.join(data_dir, 'Data_Entry_2017_v2020.csv'))
-# table_data = table_data.iloc[0:5000, :]
+# table_data = table_data.iloc[0:500, :]
 VAE_DS = VAE.XRayDataset(table_data=table_data,
                          root_dir=image_dir,
                          transform=VAE.basic_transform)
 
 # setup trainer and train
-VAE_Trainer = VAE.Trainer(XRayDS=VAE_DS, learning_rate=5e-8, weight_decay=1e-8)
-n_epochs = 50
+VAE_Trainer = VAE.Trainer(XRayDS=VAE_DS)
+n_epochs = 10
 VAE_Trainer.train(num_epochs=n_epochs, batch_size=50)
 # save model state
 FinalModel = VAE_Trainer.Model
