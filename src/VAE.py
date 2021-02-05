@@ -18,7 +18,7 @@ import re
 import datetime
 import gc
 import sys
-import psutil
+# import psutil
 # from memory_profiler import profile
 # from tqdm import tqdm
 
@@ -268,80 +268,173 @@ class Encoder(nn.Module):
     Encoder function. Assumes square image input with 1 channel.
     """
 
-    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1):
+    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1, n_conv = 2, c_mul = 2):
+        """
+        c = number of output channels after first convolution. This number is multiplied by c_mul in each layer
+        input_size = width of square image
+        latent_dims = number of latent dimensions in autoencoder. produced by fully connected layers producing mu and logvar
+        S = stride
+        F = filter size, for square filter
+        P = padding.
+        n_conv = number of convolution layers
+        c_mul = factor to multiply number of channels by for each convolution after first
+        """
         super(Encoder, self).__init__()
-        # note: if we want to make this prettier later we can make depth a controllable parameter
-        # and loop over depth indices to produce layers or call layers when running the forward method
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=c, kernel_size=F, stride=S, padding=P)
-        conv1_out_size = conv_output_size(input_size, S, F, P)
-        self.conv2 = nn.Conv2d(in_channels=c, out_channels=c * 2, kernel_size=F, stride=S, padding=P)
-        conv2_out_size = conv_output_size(conv1_out_size, S, F, P)
-#         self.conv3 = nn.Conv2d(in_channels=c * 2, out_channels=c * 4, kernel_size=F, stride=S, padding=P)
-#         conv3_out_size = conv_output_size(conv2_out_size, S, F, P)
-#         linear_input_size = (int(c * 4 * conv3_out_size * conv3_out_size))
-        linear_input_size = (int(c * 2 * conv2_out_size * conv2_out_size))
+        self.conv_layers = nn.ModuleList()
+
+        for i in range(n_conv):
+            if i == 0:
+                in_channels_i = 1
+                out_channels_i = c
+                conv_out_size = conv_output_size(input_size, S, F, P)
+            else:
+                conv_out_size = conv_output_size(conv_out_size, S, F, P)
+                out_channels_i = out_channels_i*c_mul
+
+            new_layer = nn.Conv2d(in_channels=in_channels_i,
+                                  out_channels=out_channels_i,
+                                  kernel_size=F,
+                                  stride=S,
+                                  padding=P)
+            self.conv_layers.append(new_layer)
+
+            in_channels_i = out_channels_i
+        
+        linear_input_size = int(out_channels_i*conv_out_size*conv_out_size)
         self.fc_mu = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
         self.fc_logvar = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
 
     def forward(self, x):
-        x = F.softplus(self.conv1(x))
-        x = F.softplus(self.conv2(x))
-#         x = F.softplus(self.conv3(x))
-        x = x.view(x.size((int(0))), -1)  # flatten batch of multi-channel feature maps to a batch of feature vectors
+        # expect a sequence of convolutional layers, followed by two
+        # separate FC layers.
+        # output of final conv layer is fed to distinct FC layers
+        for f in self.conv_layers:
+            x = f(x)
+        
+        x = x.view(x.size((int(0))), -1)  
         x_mu = self.fc_mu(x)
         x_logvar = self.fc_logvar(x)
+        
         return x_mu, x_logvar
+    
+
+def transposed_conv_out_size(W, S, F, P):
+    """
+    W = input size
+    S = stride
+    F = filter size
+    P = padding
+    returns: output width for transposed convolution
+    
+    Note: This only works if no output padding or dilation added in pytorch
+    """
+    O = (W - 1)*S + F - 2*P
+    
+    return O
 
 
 class Decoder(nn.Module):
     """
-    Decoder function.
+    Decoder function. 
+    
+    Notes:
+    
+    Note that in terms of convolutions, we attempt to do a mirror image of the encoder function
+    given identical arguments for c, input_size = output_size, latent_dims, S, F, P, n_conv, and c_mul.
+    If these arguments are not identical to those in encoder function, encoder output will not be correctly
+    handled by decoder. Returns square image of size (input_size, input_size) if (W + 2P - K)/S is an integer
+    for each convolution operation.
+    
+    input_size = size of input to encoder function
+    latent_dims = number of latent dims
+    S = stride
+    F = filter size
+    P = padding
+    n_conv = number of transposed convolutional layers
+    c_mul = factor to divide # channels by after each transposed convolution
+    output = 'Gaussian' for gaussian output, 'Binary' for output between 0 and 1. In former case,
+    
+    returns: square image of size (input_size, input_size)
     """
-    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1, output = 'Gaussian'):
+    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1, n_conv=2, c_mul=2, output='Gaussian'):
         super(Decoder, self).__init__()
-        # the below four lines are ugly but quick. In future make this class able to dynamically
-        # allocate layers, but first let's get a simple first pass
-        conv1_out_size = conv_output_size(input_size, S, F, P)
-        conv2_out_size = conv_output_size(conv1_out_size, S, F, P)
-#         conv3_out_size = conv_output_size(conv2_out_size, S, F, P)
-        # self.conv3_out_size = int(conv3_out_size)
-        self.conv2_out_size = int(conv2_out_size)
-        self.channels = c
-#         self.fc1 = nn.Linear(in_features=(int(latent_dims)),
-#                              out_features=(int(c * 4 * conv3_out_size * conv3_out_size)))
-#         self.conv3 = nn.ConvTranspose2d(in_channels=c * 4, out_channels=c * 2, kernel_size=F, stride=S, padding=P)
-        self.fc1 = nn.Linear(in_features=(int(latent_dims)),
-                             out_features=(int(c * 2 * conv2_out_size * conv2_out_size)))
-        self.conv2 = nn.ConvTranspose2d(in_channels=c * 2, out_channels=c, kernel_size=F, stride=S, padding=P)
-        self.conv1 = nn.ConvTranspose2d(in_channels=c, out_channels=1, kernel_size=F, stride=S, padding=P)
+        tconv_layer_list = []
+        self.tconv_layers = nn.ModuleList()
+             
+        for i in range(n_conv):
+            # first layer defined is the last transposed convolution layer
+            # we loop until the first transposed convolution layer, which is to mirror the
+            # last convolution layer prior to the linear layer
+            if i == 0:
+                out_channels_i = 1
+                in_channels_i = c
+                conv_out_size = conv_output_size(input_size, S, F, P)
+            else:
+                conv_out_size = conv_output_size(conv_out_size, S, F, P)
+                out_channels_i = in_channels_i
+                in_channels_i = in_channels_i*c_mul
+            tconv_layer = nn.ConvTranspose2d(in_channels=in_channels_i,
+                                             out_channels=out_channels_i,
+                                             kernel_size=F,
+                                             stride=S,
+                                             padding=P)
+            tconv_layer_list.append(tconv_layer)
+
+        for i in range(n_conv):
+            # we now append the layers defined in tconv_layer_list in reverse order
+            self.tconv_layers.append(tconv_layer_list.pop())
+            
+        # check that output size is OK
+        try:
+            for i in range(n_conv):
+                if i == 0:
+                    transp_conv_in_size = conv_out_size
+                else:
+                    transp_conv_in_size = transp_conv_out_size
+
+                transp_conv_out_size = transposed_conv_out_size(transp_conv_in_size, S, F, P)
+                
+            if not transp_conv_out_size == input_size:
+                assert False
+                
+        except:
+            msg = 'final transposed convolution output size {} does not match input size {}'
+            raise ValueError(msg.format(transp_conv_out_size, input_size))
+
+        # last but not least add fully connected layer
+        self.fc = nn.Linear(in_features=int(latent_dims),
+                           out_features=int(in_channels_i*conv_out_size**2))
+        # define output type as binary or gaussian
         self.output = output
+        self.conv_out_size = conv_out_size
+        self.in_channels = in_channels_i
+                             
     def forward(self, x):
-        c = self.channels
-        output = self.output
-#         conv3_out_size = self.conv3_out_size
-        conv2_out_size = self.conv2_out_size
-        x = self.fc1(x)
-#         x = x.view((x.shape[0], c * 4, conv3_out_size,
-#                     conv3_out_size))  # unflatten batch of feature vectors to a batch of multi-channel feature maps
-        x = x.view((x.shape[0], c * 2, conv2_out_size,
-                    conv2_out_size))  # unflatten batch of feature vectors to a batch of multi-channel feature maps
-#         x = F.softplus(self.conv3(x))
-        x = F.softplus(self.conv2(x))
-        if output == 'Gaussian':
-            x = self.conv1(x)
-        elif output == 'Binary':
-            x = x = torch.sigmoid(self.conv1(x))
+        # run linear layer
+        x = self.fc(x)
+        # reshape linear layer output for conv layers
+        conv_out_size = int(self.conv_out_size)
+        in_channels = int(self.in_channels)
+        x = x.view((x.shape[0], in_channels, conv_out_size, conv_out_size))
+        # run through conv layers
+        for f in self.tconv_layers:
+            x = f(x)
+        # use sigmoid if binary output desired
+        if self.output == 'Gaussian':
+            x = x
+        elif self.output == 'Binary':
+            x = torch.sigmoid(self.conv1(x))
         else:
             raise ValueError('output should be specified as Gaussian or Binary')
             
         return x
 
 
-class VariationalAutoencoder(nn.Module):
-    def __init__(self, input_size=1024, c=4, latent_dims=20, S=2, F=4, P=1, training=True, output = 'Gaussian'):
-        super(VariationalAutoencoder, self).__init__()
-        self.encoder = Encoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P)
-        self.decoder = Decoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, output = output)
+class VariationalAutoEncoder(nn.Module):
+    def __init__(self, input_size=1024, c=4, latent_dims=20, S=2, F=4, P=1, c_mul=2, training=True, output='Gaussian'):
+        super(VariationalAutoEncoder, self).__init__()
+        self.encoder = Encoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul)
+        self.decoder = Decoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, output = output)
         self.training = training
 
     def set_train_status(self, training):
@@ -422,7 +515,7 @@ class Trainer(object):
 
     def __init__(self, 
                  XRayDS, 
-                 Model = VariationalAutoencoder(), 
+                 Model=VariationalAutoEncoder(),
                  stratify=None, 
                  train_frac=0.8, 
                  learning_rate=1e-3, 
@@ -430,8 +523,15 @@ class Trainer(object):
                  use_GPU = True):
         """
         XRayDS = XRayDataSet
+        Model = VariationalAutoEncoder object
         stratify = vector of classes to stratify by.
         train_frac = fraction of samples to use for training
+        learning_rate = learning rate
+        weight_decay = weight decay
+        use_GPU = whether to use GPU
+
+        Description: Handles training of VariationalAutoEncoder object given an XRayDS object
+        Notes: ADAM optimizer used
         """
         # below lines commented out as I can't figure out whey isinstance(XRayDS, XRayDataset) fails
         #         try:
@@ -501,8 +601,6 @@ class Trainer(object):
                 total_log_pxz = 0.
                 m = 0
                 for sample_batched in loaders[stage]:
-#                     print('### Batch {} ###'.format(m + 1))
-                    # load image and put to appropriate device
                     x = sample_batched['image']
                     x = x.to(self.device)
                     recon_x, z, mu, logvar = self.Model.forward(x)
