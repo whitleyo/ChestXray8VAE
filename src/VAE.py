@@ -18,7 +18,7 @@ import re
 import datetime
 import gc
 import sys
-# import psutil
+import psutil
 # from memory_profiler import profile
 # from tqdm import tqdm
 
@@ -45,7 +45,7 @@ class SampleTransform(object):
         # img_transform must be subclass of nn.Module
         self.img_transform = img_transform
 
-    def __transform__(self, sample):
+    def __transform__(self, image):
         raise NotImplementedError('method __transform__ not defined for this class.')
 
     def __call__(self, sample):
@@ -69,6 +69,22 @@ class ToTensor(SampleTransform):
         return transf_image
 
 
+class Resize(SampleTransform):
+    """
+    Resizes image to specified shape. Uses bilinear interpolation.
+    """
+
+    def __init__(self, size):
+        """
+        size = output size of image
+        """
+        super().__init__(img_transform=transforms.Resize(size=size))
+
+    def __transform__(self, image):
+        transf_image = self.img_transform.__call__(image)
+        return transf_image
+
+
 class Normalize(SampleTransform):
     """
     Normalize an image to specified mean and std deviation
@@ -82,18 +98,18 @@ class Normalize(SampleTransform):
         return transf_image
 
 
-class RandomHorizontalFlip(SampleTransform):
-    """
-    Performs random horizontal flip of image with p = 0.5 for the flip
-    See docs for torchvision.transforms.RandomHorizontalFlip for more details
-    """
-
-    def __init__(self):
-        super().__init__(img_transform=transforms.RandomHorizontalFlip())
-
-    def __transform__(self, image):
-        transf_image = self.img_transform.__call__(image)
-        return transf_image
+# class RandomHorizontalFlip(SampleTransform):
+#     """
+#     Performs random horizontal flip of image with p = 0.5 for the flip
+#     See docs for torchvision.transforms.RandomHorizontalFlip for more details
+#     """
+#
+#     def __init__(self):
+#         super().__init__(img_transform=transforms.RandomHorizontalFlip())
+#
+#     def __transform__(self, image):
+#         transf_image = self.img_transform.__call__(image)
+#         return transf_image
 
 
 # basic transform function
@@ -104,6 +120,7 @@ std_intensity = np.float(58.2)
 
 basic_transform = transforms.Compose([
         ToTensor(),
+        Resize(size=(64, 64)),
         Normalize(mean_intensity, std_intensity)
     ])
 
@@ -268,7 +285,7 @@ class Encoder(nn.Module):
     Encoder function. Assumes square image input with 1 channel.
     """
 
-    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1, n_conv = 2, c_mul = 2):
+    def __init__(self, c, input_size=64, fc0_dims=2048, latent_dims=16, S=2, F=4, P=1, n_conv = 2, c_mul = 2):
         """
         c = number of output channels after first convolution. This number is multiplied by c_mul in each layer
         input_size = width of square image
@@ -281,6 +298,7 @@ class Encoder(nn.Module):
         """
         super(Encoder, self).__init__()
         self.conv_layers = nn.ModuleList()
+        self.norm_layers = nn.ModuleList()
 
         for i in range(n_conv):
             if i == 0:
@@ -290,28 +308,44 @@ class Encoder(nn.Module):
             else:
                 conv_out_size = conv_output_size(conv_out_size, S, F, P)
                 out_channels_i = out_channels_i*c_mul
-
+            # Conv2D layer
             new_layer = nn.Conv2d(in_channels=in_channels_i,
                                   out_channels=out_channels_i,
                                   kernel_size=F,
                                   stride=S,
                                   padding=P)
             self.conv_layers.append(new_layer)
+            # 2d BatchNorm layer
+            bn_layer = nn.BatchNorm2d(num_features=out_channels_i)
+            self.conv_layers.append(bn_layer)
 
             in_channels_i = out_channels_i
         
         linear_input_size = int(out_channels_i*conv_out_size*conv_out_size)
-        self.fc_mu = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
-        self.fc_logvar = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
+        self.fc0 = nn.Linear(in_features=linear_input_size, out_features=(int(fc0_dims)))
+        self.fc0_bn = nn.BatchNorm1d(num_features=int(fc0_dims))
+        self.fc_mu = nn.Linear(in_features=fc0_dims, out_features=(int(latent_dims)))
+        self.fc_logvar = nn.Linear(in_features=fc0_dims, out_features=(int(latent_dims)))
 
     def forward(self, x):
-        # expect a sequence of convolutional layers, followed by two
-        # separate FC layers.
+        # expect a sequence of convolutional layers, followed by 1 fc layer
+        # followed by two separate FC layers.
         # output of final conv layer is fed to distinct FC layers
         for f in self.conv_layers:
-            x = f(x)
-        
-        x = x.view(x.size((int(0))), -1)  
+            # only do relu with convolutional layers. relu
+            # not performed on batchnorm layers
+            do_relu = isinstance(f, nn.Conv2d)
+            if do_relu:
+                x = F.relu(f(x))
+            else:
+                x = f(x)
+            # x = nn.BatchNorm2d(x.shape[1])(x)
+            # x = f(x)
+
+        x = x.view(x.size((int(0))), -1)
+        x = F.relu(self.fc0(x))
+        x = self.fc0_bn(x)
+        # x = self.fc0(x)
         x_mu = self.fc_mu(x)
         x_logvar = self.fc_logvar(x)
         
@@ -346,6 +380,7 @@ class Decoder(nn.Module):
     for each convolution operation.
     
     input_size = size of input to encoder function
+    fc0_dims = size of 'expansion' linear layer output, mirroring fc0 in
     latent_dims = number of latent dims
     S = stride
     F = filter size
@@ -356,8 +391,9 @@ class Decoder(nn.Module):
     
     returns: square image of size (input_size, input_size)
     """
-    def __init__(self, c, input_size=1024, latent_dims=20, S=2, F=4, P=1, n_conv=2, c_mul=2, output='Gaussian'):
+    def __init__(self, c, input_size=64, fc0_dims=2048, latent_dims=16, S=2, F=4, P=1, n_conv=2, c_mul=2, output='Gaussian'):
         super(Decoder, self).__init__()
+        # tconv layers also includes batch normalization layers
         tconv_layer_list = []
         self.tconv_layers = nn.ModuleList()
              
@@ -373,6 +409,15 @@ class Decoder(nn.Module):
                 conv_out_size = conv_output_size(conv_out_size, S, F, P)
                 out_channels_i = in_channels_i
                 in_channels_i = in_channels_i*c_mul
+
+            if i != 0:
+                # batchnorm layers are appended to list prior to tconv layers
+                # after first iteration of loop. Reversing order of layers
+                # in the ModuleList, we get tconv followed by batch norm for
+                # all tconv operations except last
+                tconv_bn_layer = nn.BatchNorm2d(num_features=out_channels_i)
+                tconv_layer_list.append(tconv_bn_layer)
+
             tconv_layer = nn.ConvTranspose2d(in_channels=in_channels_i,
                                              out_channels=out_channels_i,
                                              kernel_size=F,
@@ -380,7 +425,7 @@ class Decoder(nn.Module):
                                              padding=P)
             tconv_layer_list.append(tconv_layer)
 
-        for i in range(n_conv):
+        for i in range(len(tconv_layer_list)):
             # we now append the layers defined in tconv_layer_list in reverse order
             self.tconv_layers.append(tconv_layer_list.pop())
             
@@ -401,24 +446,44 @@ class Decoder(nn.Module):
             msg = 'final transposed convolution output size {} does not match input size {}'
             raise ValueError(msg.format(transp_conv_out_size, input_size))
 
-        # last but not least add fully connected layer
-        self.fc = nn.Linear(in_features=int(latent_dims),
-                           out_features=int(in_channels_i*conv_out_size**2))
+        # last but not least add fully connected layers.
+        self.fc1 = nn.Linear(in_features=int(latent_dims),
+                             out_features=int(fc0_dims))
+        fc0_out_size=int(in_channels_i*conv_out_size**2)
+        self.fc0 = nn.Linear(in_features=int(fc0_dims),
+                             out_features=fc0_out_size)
+        # define batch normalization layers for the FC layers
+        self.fc1_bn = nn.BatchNorm1d(num_features=fc0_dims)
+        self.fc0_bn = nn.BatchNorm1d(num_features=fc0_out_size)
         # define output type as binary or gaussian
         self.output = output
+        # keep useful numbers
         self.conv_out_size = conv_out_size
         self.in_channels = in_channels_i
                              
     def forward(self, x):
         # run linear layer
-        x = self.fc(x)
+        x = F.relu(self.fc1(x))
+        x = self.fc1_bn(x)
+        x = F.relu(self.fc0(x))
+        x = self.fc0_bn(x)
+        # x = self.fc1(x)
+        # x = self.fc0(x)
         # reshape linear layer output for conv layers
         conv_out_size = int(self.conv_out_size)
         in_channels = int(self.in_channels)
         x = x.view((x.shape[0], in_channels, conv_out_size, conv_out_size))
         # run through conv layers
-        for f in self.tconv_layers:
-            x = f(x)
+        for i in range(len(self.tconv_layers)):
+            f = self.tconv_layers[i]
+            is_tconv = isinstance(f, torch.nn.modules.ConvTranspose2d)
+            last_layer = i == len(self.tconv_layers) - 1
+            do_relu = is_tconv and not last_layer
+            if do_relu:
+                x = F.relu(f(x))
+                # x = f(x)
+            else:
+                x = f(x)
         # use sigmoid if binary output desired
         if self.output == 'Gaussian':
             x = x
@@ -431,10 +496,10 @@ class Decoder(nn.Module):
 
 
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_size=1024, c=4, latent_dims=20, S=2, F=4, P=1, c_mul=2, training=True, output='Gaussian'):
+    def __init__(self, input_size=64, c=4, fc0_dims=2048, latent_dims=16, S=2, F=4, P=1, c_mul=2, n_conv=2, training=True, output='Gaussian'):
         super(VariationalAutoEncoder, self).__init__()
-        self.encoder = Encoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul)
-        self.decoder = Decoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, output = output)
+        self.encoder = Encoder(input_size=input_size, c=c, fc0_dims=fc0_dims, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv)
+        self.decoder = Decoder(input_size=input_size, c=c, fc0_dims=fc0_dims, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv, output = output)
         self.training = training
 
     def set_train_status(self, training):
