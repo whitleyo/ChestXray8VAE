@@ -22,19 +22,20 @@ table_data = pd.read_csv(os.path.join(data_dir, 'Data_Entry_2017_v2020.csv'))
 table_data = table_data.iloc[0:5000, :] # take first 5k. Should be sufficient for decent-ish performance
 VAE_DS = VAE.XRayDataset(table_data=table_data,
                          root_dir=image_dir,
-                         transform=VAE.create_transform(resize_width=256))
+                         transform=VAE.create_transform_zero_one_norm(resize_width=256))
 
 # setup trainer and train
 VAE_Trainer = VAE.Trainer(XRayDS=VAE_DS,
                           Model=VAE.VariationalAutoEncoder(input_size=256,
                                                            # fc0_dims=1024,
-                                                           latent_dims=1024,
-                                                           n_conv=5,
+                                                           latent_dims=512,
+                                                           n_conv=4,
                                                            F=4,
                                                            P=1,
                                                            S=2,
                                                            c=32,
-                                                           use_batch_norm=True),
+                                                           use_batch_norm=False,
+                                                           output='Sigmoid'),
                           learning_rate=1e-3)
 print('model')
 print(VAE_Trainer.Model)

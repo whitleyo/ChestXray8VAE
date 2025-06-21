@@ -126,6 +126,13 @@ def create_transform(resize_width=512, mean_intensity=mean_intensity, std_intens
     ])
     return basic_transform
 
+def create_transform_zero_one_norm(resize_width=512):
+    basic_transform = transforms.Compose([
+        ToTensor(),
+        Resize(size=(resize_width, resize_width))
+    ])
+    return basic_transform
+
 
 # basic_transform = transforms.Compose([
 #         ToTensor(),
@@ -402,7 +409,8 @@ class Decoder(nn.Module):
     P = padding
     n_conv = number of transposed convolutional layers
     c_mul = factor to divide # channels by after each transposed convolution
-    output = 'Gaussian' for gaussian output, 'Binary' for output between 0 and 1. In former case,
+    output = 'Gaussian' for gaussian output, 'Sigmoid' for output between 0 and 1. The former case just has a final
+    linear transposed convolution to get to the desired output size, while sigmoid puts a sigmoid on top of it
     
     returns: square image of size (input_size, input_size)
     """
@@ -523,10 +531,10 @@ class Decoder(nn.Module):
         # use sigmoid if binary output desired
         if self.output == 'Gaussian':
             x = x
-        elif self.output == 'Binary':
+        elif self.output == 'Sigmoid':
             x = torch.sigmoid(x)
         else:
-            raise ValueError('output should be specified as Gaussian or Binary')
+            raise ValueError('output should be specified as Gaussian or Sigmoid')
             
         return x
 
