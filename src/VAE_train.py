@@ -35,7 +35,7 @@ VAE_Trainer = VAE.Trainer(XRayDS=VAE_DS,
                                                            S=2,
                                                            c=32,
                                                            use_batch_norm=False,
-                                                           output='Sigmoid'),
+                                                           output='Gaussian'),
                           learning_rate=1e-3)
 print('model')
 print(VAE_Trainer.Model)
