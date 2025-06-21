@@ -20,7 +20,7 @@ links = [
 
 # links = ['https://nihcc.box.com/shared/static/vfk49d74nhbxq3nqjg0900w5nvkorp5c.gz']
 
-for idx, link in enumerate(links[:3]):
+for idx, link in enumerate(links):
     fn = 'images_%02d.tar.gz' % (idx+1)
     print('downloading'+fn+'...')
     urllib.request.urlretrieve(link, fn)  # download the zip file

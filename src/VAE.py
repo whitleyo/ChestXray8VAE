@@ -112,17 +112,25 @@ class Normalize(SampleTransform):
 #         return transf_image
 
 
-# basic transform function
-# global variables for mean and std dev of intensity based on sandbox notebook
-# TODO: setup to calculate these stats based on random sample of images
-mean_intensity = np.float(123.5)
-std_intensity = np.float(58.2)
+# # basic transform function
+# # global variables for mean and std dev of intensity based on sandbox notebook
+# # TODO: setup to calculate these stats based on random sample of images
+mean_intensity = np.float32(123.5)
+std_intensity = np.float32(58.2)
 
-basic_transform = transforms.Compose([
+def create_transform(resize_width=512, mean_intensity=mean_intensity, std_intensity=std_intensity):
+    basic_transform = transforms.Compose([
         ToTensor(),
-        Resize(size=(64, 64)),
+        Resize(size=(resize_width, resize_width)),
         Normalize(mean_intensity, std_intensity)
     ])
+    return basic_transform
+
+
+# basic_transform = transforms.Compose([
+#         ToTensor(),
+#         Normalize(mean_intensity, std_intensity)
+#     ])
 
 
 class XRayDataset(Dataset):
@@ -204,7 +212,7 @@ class XRayDataset(Dataset):
         """
         # get unique label names
         col_contents = self.table_data[col]
-        label_names = [re.split('\|', x) for x in col_contents.to_numpy().astype('str')]
+        label_names = [re.split(r'\|', x) for x in col_contents.to_numpy().astype('str')]
         label_names = np.unique(np.array([x for y in label_names for x in y]))
         return label_names
 
@@ -212,7 +220,7 @@ class XRayDataset(Dataset):
         """
         One-hot encode a particular label in categorical data.
         """
-        r = re.compile('(\|)*' + label + '(\|)*')
+        r = re.compile(r'(?<!\w)\|*' + re.escape(label) + r'\|*(?!\w)')
         col_content = self.table_data[col].to_numpy().astype('str')
         vmatch = np.vectorize(lambda x: bool(r.search(x)))
         sel = vmatch(col_content).astype('int32')
@@ -233,7 +241,7 @@ class XRayDataset(Dataset):
     def get_multi_label(self, col):
         """
         """
-        r = re.compile('\|')
+        r = re.compile(r'\|')
         col_content = self.table_data[col].to_numpy().astype('str')
         vmatch = np.vectorize(lambda x: bool(r.search(x)))
         sel = vmatch(col_content).astype('int32')
@@ -285,7 +293,7 @@ class Encoder(nn.Module):
     Encoder function. Assumes square image input with 1 channel.
     """
 
-    def __init__(self, c, input_size=64, fc0_dims=2048, latent_dims=16, S=2, F=4, P=1, n_conv = 2, c_mul = 2):
+    def __init__(self, c, input_size=64, latent_dims=16, S=2, F=4, P=1, n_conv = 2, c_mul = 2, use_batch_norm=True):
         """
         c = number of output channels after first convolution. This number is multiplied by c_mul in each layer
         input_size = width of square image
@@ -298,7 +306,9 @@ class Encoder(nn.Module):
         """
         super(Encoder, self).__init__()
         self.conv_layers = nn.ModuleList()
-        self.norm_layers = nn.ModuleList()
+        self.use_batch_norm = use_batch_norm
+        if self.use_batch_norm:
+            self.norm_layers = nn.ModuleList()
 
         for i in range(n_conv):
             if i == 0:
@@ -315,36 +325,42 @@ class Encoder(nn.Module):
                                   stride=S,
                                   padding=P)
             self.conv_layers.append(new_layer)
-            # 2d BatchNorm layer
-            bn_layer = nn.BatchNorm2d(num_features=out_channels_i)
-            self.conv_layers.append(bn_layer)
+            if self.use_batch_norm:
+                # 2d BatchNorm layer
+                bn_layer = nn.BatchNorm2d(num_features=out_channels_i)
+                self.norm_layers.append(bn_layer)
 
             in_channels_i = out_channels_i
+
+        if self.use_batch_norm:
+            assert len(self.norm_layers) == len(self.conv_layers)
         
         linear_input_size = int(out_channels_i*conv_out_size*conv_out_size)
-        self.fc0 = nn.Linear(in_features=linear_input_size, out_features=(int(fc0_dims)))
-        self.fc0_bn = nn.BatchNorm1d(num_features=int(fc0_dims))
-        self.fc_mu = nn.Linear(in_features=fc0_dims, out_features=(int(latent_dims)))
-        self.fc_logvar = nn.Linear(in_features=fc0_dims, out_features=(int(latent_dims)))
+        # self.fc0 = nn.Linear(in_features=linear_input_size, out_features=(int(fc0_dims)))
+        # if self.use_batch_norm:
+        #     self.fc0_bn = nn.BatchNorm1d(num_features=int(fc0_dims))
+        # self.fc_mu = nn.Linear(in_features=fc0_dims, out_features=(int(latent_dims)))
+        # self.fc_logvar = nn.Linear(in_features=fc0_dims, out_features=(int(latent_dims)))
+        self.fc_mu = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
+        self.fc_logvar = nn.Linear(in_features=linear_input_size, out_features=(int(latent_dims)))
 
     def forward(self, x):
         # expect a sequence of convolutional layers, followed by 1 fc layer
         # followed by two separate FC layers.
         # output of final conv layer is fed to distinct FC layers
-        for f in self.conv_layers:
-            # only do relu with convolutional layers. relu
-            # not performed on batchnorm layers
-            do_relu = isinstance(f, nn.Conv2d)
-            if do_relu:
-                x = F.relu(f(x))
-            else:
-                x = f(x)
-            # x = nn.BatchNorm2d(x.shape[1])(x)
-            # x = f(x)
+        for i in range(len(self.conv_layers)):
+            conv_i = self.conv_layers[i]
+            x = conv_i(x)
+            if self.use_batch_norm:
+                bn_i = self.norm_layers[i]
+                x = bn_i(x)
+            x = F.relu(x)
 
         x = x.view(x.size((int(0))), -1)
-        x = F.relu(self.fc0(x))
-        x = self.fc0_bn(x)
+        # x = self.fc0(x)
+        # if self.use_batch_norm:
+        #     x = self.fc0_bn(x)
+        # x = F.relu(x)
         # x = self.fc0(x)
         x_mu = self.fc_mu(x)
         x_logvar = self.fc_logvar(x)
@@ -380,7 +396,6 @@ class Decoder(nn.Module):
     for each convolution operation.
     
     input_size = size of input to encoder function
-    fc0_dims = size of 'expansion' linear layer output, mirroring fc0 in
     latent_dims = number of latent dims
     S = stride
     F = filter size
@@ -391,11 +406,14 @@ class Decoder(nn.Module):
     
     returns: square image of size (input_size, input_size)
     """
-    def __init__(self, c, input_size=64, fc0_dims=2048, latent_dims=16, S=2, F=4, P=1, n_conv=2, c_mul=2, output='Gaussian'):
+    def __init__(self, c, input_size=64, latent_dims=16, S=2, F=4, P=1, n_conv=2, c_mul=2, output='Gaussian', use_batch_norm=True):
         super(Decoder, self).__init__()
-        # tconv layers also includes batch normalization layers
         tconv_layer_list = []
         self.tconv_layers = nn.ModuleList()
+        self.use_batch_norm = use_batch_norm
+        if self.use_batch_norm:
+            bnorm_layer_list = []
+            self.bnorm_layers = nn.ModuleList()
              
         for i in range(n_conv):
             # first layer defined is the last transposed convolution layer
@@ -415,8 +433,9 @@ class Decoder(nn.Module):
                 # after first iteration of loop. Reversing order of layers
                 # in the ModuleList, we get tconv followed by batch norm for
                 # all tconv operations except last
-                tconv_bn_layer = nn.BatchNorm2d(num_features=out_channels_i)
-                tconv_layer_list.append(tconv_bn_layer)
+                if self.use_batch_norm:
+                    tconv_bn_layer = nn.BatchNorm2d(num_features=out_channels_i)
+                    bnorm_layer_list.append(tconv_bn_layer)
 
             tconv_layer = nn.ConvTranspose2d(in_channels=in_channels_i,
                                              out_channels=out_channels_i,
@@ -428,6 +447,12 @@ class Decoder(nn.Module):
         for i in range(len(tconv_layer_list)):
             # we now append the layers defined in tconv_layer_list in reverse order
             self.tconv_layers.append(tconv_layer_list.pop())
+        
+        if self.use_batch_norm:
+            for i in range(len(bnorm_layer_list)):
+                self.bnorm_layers.append(bnorm_layer_list.pop())
+
+            assert len(self.bnorm_layers) == (len(self.tconv_layers) - 1)
             
         # check that output size is OK
         try:
@@ -446,15 +471,20 @@ class Decoder(nn.Module):
             msg = 'final transposed convolution output size {} does not match input size {}'
             raise ValueError(msg.format(transp_conv_out_size, input_size))
 
-        # last but not least add fully connected layers.
+        # # last but not least add fully connected layers.
+        # self.fc1 = nn.Linear(in_features=int(latent_dims),
+        #                      out_features=int(fc0_dims))
+        fc1_out_size=int(in_channels_i*conv_out_size**2)
         self.fc1 = nn.Linear(in_features=int(latent_dims),
-                             out_features=int(fc0_dims))
-        fc0_out_size=int(in_channels_i*conv_out_size**2)
-        self.fc0 = nn.Linear(in_features=int(fc0_dims),
-                             out_features=fc0_out_size)
-        # define batch normalization layers for the FC layers
-        self.fc1_bn = nn.BatchNorm1d(num_features=fc0_dims)
-        self.fc0_bn = nn.BatchNorm1d(num_features=fc0_out_size)
+                            out_features=fc1_out_size)
+        # fc0_out_size=int(in_channels_i*conv_out_size**2)
+        # self.fc0 = nn.Linear(in_features=int(fc0_dims),
+        #                      out_features=fc0_out_size)
+        if self.use_batch_norm:
+            # define batch normalization layers for the FC layers
+            self.fc1_bn = nn.BatchNorm1d(num_features=fc1_out_size)
+            # self.fc1_bn = nn.BatchNorm1d(num_features=fc0_dims)
+        #     self.fc0_bn = nn.BatchNorm1d(num_features=fc0_out_size)
         # define output type as binary or gaussian
         self.output = output
         # keep useful numbers
@@ -462,11 +492,15 @@ class Decoder(nn.Module):
         self.in_channels = in_channels_i
                              
     def forward(self, x):
-        # run linear layer
-        x = F.relu(self.fc1(x))
-        x = self.fc1_bn(x)
-        x = F.relu(self.fc0(x))
-        x = self.fc0_bn(x)
+        # # run linear layer
+        x = self.fc1(x)
+        if self.use_batch_norm:
+            x = self.fc1_bn(x)
+        x = F.relu(x)
+        # x = self.fc0(x)
+        # if self.use_batch_norm:
+        #     x = self.fc0_bn(x)
+        # x = F.relu(x)
         # x = self.fc1(x)
         # x = self.fc0(x)
         # reshape linear layer output for conv layers
@@ -475,20 +509,22 @@ class Decoder(nn.Module):
         x = x.view((x.shape[0], in_channels, conv_out_size, conv_out_size))
         # run through conv layers
         for i in range(len(self.tconv_layers)):
-            f = self.tconv_layers[i]
-            is_tconv = isinstance(f, torch.nn.modules.ConvTranspose2d)
-            last_layer = i == len(self.tconv_layers) - 1
-            do_relu = is_tconv and not last_layer
-            if do_relu:
-                x = F.relu(f(x))
-                # x = f(x)
-            else:
-                x = f(x)
+            conv_i = self.tconv_layers[i]
+            x = conv_i(x)
+            # only do batch normalization + relu up to penultimate layer output
+            if i < (len(self.tconv_layers) - 1):
+                if self.use_batch_norm:
+                    bnorm_i = self.bnorm_layers[i]
+                    x = bnorm_i(x)
+                x = F.relu(x)
+            # is_tconv = isinstance(f, torch.nn.modules.ConvTranspose2d)
+            # last_layer = i == len(self.tconv_layers) - 1
+            
         # use sigmoid if binary output desired
         if self.output == 'Gaussian':
             x = x
         elif self.output == 'Binary':
-            x = torch.sigmoid(self.conv1(x))
+            x = torch.sigmoid(x)
         else:
             raise ValueError('output should be specified as Gaussian or Binary')
             
@@ -496,10 +532,12 @@ class Decoder(nn.Module):
 
 
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_size=64, c=4, fc0_dims=2048, latent_dims=16, S=2, F=4, P=1, c_mul=2, n_conv=2, training=True, output='Gaussian'):
+    def __init__(self, input_size=64, c=4, latent_dims=16, S=2, F=4, P=1, c_mul=2, n_conv=2, training=True, output='Gaussian', use_batch_norm=True):
         super(VariationalAutoEncoder, self).__init__()
-        self.encoder = Encoder(input_size=input_size, c=c, fc0_dims=fc0_dims, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv)
-        self.decoder = Decoder(input_size=input_size, c=c, fc0_dims=fc0_dims, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv, output = output)
+        # self.encoder = Encoder(input_size=input_size, c=c, fc0_dims=fc0_dims, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv, use_batch_norm=use_batch_norm)
+        # self.decoder = Decoder(input_size=input_size, c=c, fc0_dims=fc0_dims, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv, output = output, use_batch_norm=use_batch_norm)
+        self.encoder = Encoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv, use_batch_norm=use_batch_norm)
+        self.decoder = Decoder(input_size=input_size, c=c, latent_dims=latent_dims, S=S, F=F, P=P, c_mul=c_mul, n_conv=n_conv, output = output, use_batch_norm=use_batch_norm)
         self.training = training
 
     def set_train_status(self, training):
@@ -534,46 +572,58 @@ def vae_loss(recon_x, x, mu, logvar):
     mu = mean in latent space
     logvar = log-variance in latent space
     """
-    std_pixels = torch.std(x)
+    # std_pixels = torch.std(x)
     # calculate log p(x|z) for all pixels. calculated over all pixels over all images
     # normal_dist = torch.distributions.normal.Normal(0, 1)
     # std_norm_xz = (recon_x - x)/std_pixels
-    normal_xz = torch.distributions.normal.Normal(recon_x, std_pixels)
-    log_pxz = torch.sum(normal_xz.log_prob(x))
-
+    # we set the standard deviation to 1 to remove stochasticity from reconstruction error.
+    # it may well be the case that variation of pixels allows for very tolerant log probability
+    # normal_xz = torch.distributions.normal.Normal(recon_x, 1)
+    # normal_xz = torch.distributions.normal.Normal(recon_x, 1)
+    # log_pxz = torch.sum(normal_xz.log_prob(x))
+    # we approximate elbo with MSE loss as log p(X|Z). Normal distribution should effectively be the same
+    # but the only working examples of VAEs I've seen for X ray data use MSELoss
+    mse_loss = nn.MSELoss(reduction='sum')(recon_x, x)
     # calculate KL divergence between q(z) and p(z).
-    kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp(), -1)
-    # we want to maximize elbo so we set the -elbo_avg as the loss
-    elbo = log_pxz - kldivergence
-    elbo_avg = torch.mean(elbo)
-    loss = -elbo_avg
-    avg_log_pxz = torch.mean(log_pxz)
-    return loss, elbo_avg, avg_log_pxz
+    kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp())
+    # calculate elbo
+    #elbo = log_pxz - kldivergence
+    # calculate loss
+    loss = mse_loss + kldivergence
+    # elbo_avg = torch.mean(elbo)
+    # loss = -elbo_avg
+    elbo = -loss
+    # avg_log_pxz = torch.mean(log_pxz)
+    # return loss, elbo_avg, avg_log_pxz
+    log_pxz = -mse_loss
+    return loss, elbo, log_pxz
 
-def vae_loss_CE(recon_x, x, mu, logvar):
-    """
-    Calculates ELBO with bernoulli log likelihood for p(x|z)
-    recon_x = reconstructed images of x
-    x = original set of images
-    z = value of z sampled VariationalAutoEncoder.latent_sample()
-    mu = mean in latent space
-    logvar = log-variance in latent space
-    """
-    std_pixels = torch.std(x)
-    # calculate log p(x|z) for all pixels. calculated over all pixels over all images
-    # normal_dist = torch.distributions.normal.Normal(0, 1)
-    # std_norm_xz = (recon_x - x)/std_pixels
-    bernoulli_dist = torch.distributions.bernoulli.Bernoulli(x)
-    log_pxz = torch.sum(bernoulli_dist.log_prob(recon_x), (1, 2, 3))
+# def vae_loss_CE(recon_x, x, mu, logvar):
+#     """
+#     Calculates ELBO with bernoulli log likelihood for p(x|z)
+#     recon_x = reconstructed images of x
+#     x = original set of images
+#     z = value of z sampled VariationalAutoEncoder.latent_sample()
+#     mu = mean in latent space
+#     logvar = log-variance in latent space
+#     """
+#     # std_pixels = torch.std(x)
+#     # calculate log p(x|z) for all pixels. calculated over all pixels over all images
+#     # normal_dist = torch.distributions.normal.Normal(0, 1)
+#     # std_norm_xz = (recon_x - x)/std_pixels
+#     bernoulli_dist = torch.distributions.bernoulli.Bernoulli(x)
+#     log_pxz = torch.sum(bernoulli_dist.log_prob(recon_x), (1, 2, 3))
 
-    # KL Divergence for gaussian mu and logvar
-    kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp(), -1)
-    # we want to maximize elbo so we set the -elbo_avg as the loss
-    elbo = log_pxz - kldivergence
-    elbo_avg = torch.mean(elbo)
-    loss = -elbo_avg
-    avg_log_pxz = torch.mean(log_pxz)
-    return loss, elbo_avg, avg_log_pxz
+#     # KL Divergence for gaussian mu and logvar
+#     kldivergence = -0.5*torch.sum(1. + logvar - mu.pow(2) - logvar.exp())
+#     # we want to maximize elbo so we set the -elbo as the loss
+#     elbo = log_pxz - kldivergence
+#     # elbo_avg = torch.mean(elbo)
+#     # loss = -elbo_avg
+#     loss = -elbo
+#     # avg_log_pxz = torch.mean(log_pxz)
+#     # return loss, elbo_avg, avg_log_pxz
+#     return loss, elbo, log_pxz
 
 
 class Trainer(object):
@@ -662,8 +712,8 @@ class Trainer(object):
                 DS = self.SplitData[stage]
                 # total elbo and total_log_pxz are used to calculate
                 # averaged elbo and log_pxz across multiple batches
-                total_elbo = 0.
-                total_log_pxz = 0.
+                total_elbo = torch.tensor([0.])
+                total_log_pxz = torch.tensor([0.])
                 m = 0
                 for sample_batched in loaders[stage]:
                     x = sample_batched['image']
@@ -691,8 +741,8 @@ class Trainer(object):
                 # the sum across all batches is the joint probability across all batches.
                 # dividing total_log_pxz by the number of batches gets a log geometric mean
                 # for p(x|z) across batches
-                avg_elbo = total_elbo / np.float(m)
-                avg_log_pxz = total_log_pxz / np.float(m)
+                avg_elbo = (total_elbo / torch.tensor(m)).numpy()[0]
+                avg_log_pxz = (total_log_pxz / torch.tensor(m)).numpy()[0]
 
                 now = datetime.datetime.now()
                 print('### Stage Finished ###')
