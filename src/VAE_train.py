@@ -22,7 +22,7 @@ table_data = pd.read_csv(os.path.join(data_dir, 'Data_Entry_2017_v2020.csv'))
 table_data = table_data.iloc[0:5000, :] # take first 5k. Should be sufficient for decent-ish performance
 VAE_DS = VAE.XRayDataset(table_data=table_data,
                          root_dir=image_dir,
-                         transform=VAE.create_transform_zero_one_norm(resize_width=256))
+                         transform=VAE.create_transform(resize_width=256))
 
 # setup trainer and train
 VAE_Trainer = VAE.Trainer(XRayDS=VAE_DS,

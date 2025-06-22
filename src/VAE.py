@@ -115,8 +115,11 @@ class Normalize(SampleTransform):
 # # basic transform function
 # # global variables for mean and std dev of intensity based on sandbox notebook
 # # TODO: setup to calculate these stats based on random sample of images
-mean_intensity = np.float32(123.5)
-std_intensity = np.float32(58.2)
+# mean_intensity = np.float32(123.5)
+# std_intensity = np.float32(58.2)
+# note here we adjust for a mean and std after calling ToTensor. 
+mean_intensity = np.float32(0.4746)
+std_intensity = np.float32(0.2709)
 
 def create_transform(resize_width=512, mean_intensity=mean_intensity, std_intensity=std_intensity):
     basic_transform = transforms.Compose([
