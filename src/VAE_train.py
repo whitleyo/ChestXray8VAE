@@ -19,7 +19,7 @@ if not os.path.exists(output_dir):
 
 # setup dataset
 table_data = pd.read_csv(os.path.join(data_dir, 'Data_Entry_2017_v2020.csv'))
-table_data = table_data.iloc[0:5000, :] # take first 5k. Should be sufficient for decent-ish performance
+table_data = table_data.iloc[0:30000, :] # take first 30k. 80:20 split
 VAE_DS = VAE.XRayDataset(table_data=table_data,
                          root_dir=image_dir,
                          transform=VAE.create_transform(resize_width=256))
@@ -29,7 +29,7 @@ VAE_Trainer = VAE.Trainer(XRayDS=VAE_DS,
                           Model=VAE.VariationalAutoEncoder(input_size=256,
                                                            # fc0_dims=1024,
                                                            latent_dims=512,
-                                                           n_conv=4,
+                                                           n_conv=6,
                                                            F=4,
                                                            P=1,
                                                            S=2,

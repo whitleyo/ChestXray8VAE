@@ -769,3 +769,5 @@ class Trainer(object):
         print('Finished!')
         now = datetime.datetime.now()
         print(now.strftime("%Y-%m-%d %H:%M:%S"))
+
+
